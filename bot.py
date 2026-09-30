@@ -7,8 +7,14 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
 # === НАСТРОЙКИ ПОИСКА ===
-QUERY = "пластик PLA 1.75 1кг"
-MAX_PRICE = 850
+# Список запросов для проверки (проверяются по очереди)
+SEARCH_QUERIES = [
+    "пластик PLA 1.75 1кг",
+    "пластик PETG 1.75 1кг"
+]
+
+# Порог цены (в рублях). Поставим 1000 для проверки, чтобы убедиться в работе бота
+MAX_PRICE = 1000
 
 # Стоп-слова (отсекаем ручки, сопла, пробники)
 STOP_WORDS = [
@@ -38,10 +44,9 @@ def init_driver():
     options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
     return webdriver.Chrome(options=options)
 
-def main():
-    print("Запуск проверки WB в облаке...")
-    driver = init_driver()
-    search_url = f"https://www.wildberries.ru/catalog/0/search.aspx?sort=priceup&search={urllib.parse.quote(QUERY)}"
+def scan_query(driver, query: str):
+    print(f"--- Сканирование по запросу: {query} ---")
+    search_url = f"https://www.wildberries.ru/catalog/0/search.aspx?sort=priceup&search={urllib.parse.quote(query)}"
     
     try:
         driver.get(search_url)
@@ -50,6 +55,7 @@ def main():
         cards = driver.find_elements(By.CSS_SELECTOR, "article.product-card, .product-card")
         print(f"Найдено карточек: {len(cards)}")
         
+        found = 0
         for card in cards[:25]:
             article = card.get_attribute("data-nm-id") or card.get_attribute("data-card-id")
             
@@ -72,19 +78,32 @@ def main():
             if any(stop in name.lower() for stop in STOP_WORDS):
                 continue
 
+            # Фильтр по цене
             if 0 < price <= MAX_PRICE:
                 item_url = f"https://www.wildberries.ru/catalog/{article}/detail.aspx"
                 msg = (
-                    f"🔥 **Найден пластик по выгодной цене!**\n\n"
+                    f"🔥 **Найден выгодный пластик!**\n\n"
+                    f"🔍 **Категория:** {query}\n"
                     f"📦 **Товар:** {name}\n"
                     f"💰 **Цена:** {price} ₽\n"
                     f"🔗 [Перейти на WB]({item_url})"
                 )
                 send_telegram(msg)
-                print(f"Отправлено: {name} за {price} руб.")
+                print(f"-> Отправлено: {name} — {price} ₽")
+                found += 1
                 
+        if found == 0:
+            print(f"По запросу '{query}' нет предложений дешевле {MAX_PRICE} ₽.")
+
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"Ошибка при обработке запроса '{query}': {e}")
+
+def main():
+    print("Запуск сканирования Wildberries в облаке...")
+    driver = init_driver()
+    try:
+        for q in SEARCH_QUERIES:
+            scan_query(driver, q)
     finally:
         driver.quit()
 
