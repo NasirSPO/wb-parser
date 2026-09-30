@@ -1,5 +1,6 @@
 import json
 import time
+import urllib.parse
 import requests
 
 # ================= НАСТРОЙКИ =================
@@ -30,29 +31,29 @@ def send_telegram(text: str):
         print(f"Ошибка отправки TG: {e}")
 
 def fetch_via_scrapedo(target_url: str):
-    """Делает запрос через резидентный шлюз Scrape.do в обход любых WAF/403"""
-    params = {
-        "token": SCRAPE_DO_TOKEN,
-        "url": target_url
-    }
+    """Делает быстрый защищенный запрос к шлюзу без рендеринга браузера"""
+    encoded_target = urllib.parse.quote(target_url, safe="")
+    # Используем HTTPS и отключаем тяжелый render=false для мгновенного ответа
+    api_url = f"https://api.scrape.do?token={SCRAPE_DO_TOKEN}&url={encoded_target}&render=false"
+    
     try:
-        response = requests.get("http://api.scrape.do", params=params, timeout=30)
+        response = requests.get(api_url, timeout=35)
         if response.status_code == 200:
             return response.json()
         else:
-            print(f"Шлюз ответил статусом: {response.status_code}")
+            print(f"Шлюз ответил кодом {response.status_code}: {response.text[:120]}")
             return None
     except Exception as e:
-        print(f"Ошибка соединения: {e}")
+        print(f"Ошибка запроса к шлюзу: {e}")
         return None
 
 def check_query(query: str):
     print(f"\n[WB] Сканирование по запросу: {query}")
     
-    # Каталог WB с сортировкой по возрастанию цены
+    encoded_query = urllib.parse.quote(query)
     wb_url = (
         f"https://search.wb.ru/exactmatch/ru/common/v7/search?"
-        f"appType=1&curr=rub&dest=-1257786&query={query}&"
+        f"appType=1&curr=rub&dest=-1257786&query={encoded_query}&"
         f"resultset=catalog&sort=priceup&spp=30"
     )
     
@@ -69,7 +70,7 @@ def check_query(query: str):
         article = item.get("id")
         name = item.get("name", "").strip()
         
-        # Получаем реальную стоимость в рублях
+        # Получаем цену в рублях
         price = item.get("sizes", [{}])[0].get("price", {}).get("total", 0) // 100
         if not price:
             price = item.get("salePriceU", 0) // 100
