@@ -1,7 +1,7 @@
+import json
 import time
 import urllib.parse
 import urllib.request
-import json
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -12,9 +12,8 @@ SEARCH_QUERIES = [
     "пластик PETG 1.75 1кг"
 ]
 
-MAX_PRICE = 850  # Порог цены (в рублях)
+MAX_PRICE = 850  # Порог цены в рублях
 
-# Стоп-слова (отсекаем ручки, сопла, пробники)
 STOP_WORDS = [
     "3d-ручк", "3d ручк", "сопло", "сопла", "пробник", 
     "набор для", "термобарьер", "очиститель", "образец"
@@ -39,12 +38,14 @@ def init_driver():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-    return webdriver.Chrome(options=options)
+    driver = webdriver.Chrome(options=options)
+    return driver
 
 def scan_wildberries(driver, query: str):
-    print(f"[WB] Сканирование: {query}")
+    print(f"\n[WB] Поиск: {query}")
     search_url = f"https://www.wildberries.ru/catalog/0/search.aspx?sort=priceup&search={urllib.parse.quote(query)}"
     
     try:
@@ -52,9 +53,10 @@ def scan_wildberries(driver, query: str):
         time.sleep(7)
         
         cards = driver.find_elements(By.CSS_SELECTOR, "article.product-card, .product-card")
-        found = 0
+        print(f"[WB] Найдено карточек: {len(cards)}")
         
-        for card in cards[:25]:
+        found = 0
+        for card in cards[:30]:
             article = card.get_attribute("data-nm-id") or card.get_attribute("data-card-id")
             
             try:
@@ -79,67 +81,87 @@ def scan_wildberries(driver, query: str):
             if 0 < price <= MAX_PRICE:
                 item_url = f"https://www.wildberries.ru/catalog/{article}/detail.aspx"
                 msg = (
-                    f"🟣 **Найден пластик на Wildberries!**\n\n"
+                    f"🟣 **Wildberries: пластик до {MAX_PRICE} ₽!**\n\n"
                     f"🔍 **Запрос:** {query}\n"
                     f"📦 **Товар:** {name}\n"
                     f"💰 **Цена:** {price} ₽\n"
-                    f"🔗 [Перейти на Wildberries]({item_url})"
+                    f"🔗 [Купить на WB]({item_url})"
                 )
                 send_telegram(msg)
-                print(f"[WB] -> Найдено: {name} — {price} ₽")
+                print(f"[WB] -> Отправлено: {name} — {price} ₽")
                 found += 1
                 
         if found == 0:
-            print(f"[WB] Подходящих товаров по '{query}' нет.")
+            print(f"[WB] Подходящих товаров ниже {MAX_PRICE} ₽ не найдено.")
             
     except Exception as e:
-        print(f"[WB] Ошибка при сканировании '{query}': {e}")
+        print(f"[WB] Ошибка: {e}")
 
 def scan_ozon(driver, query: str):
-    print(f"[Ozon] Сканирование: {query}")
+    print(f"\n[Ozon] Поиск: {query}")
+    # Прямой поиск Ozon по каталогу с сортировкой от дешевых к дорогим
     encoded_text = urllib.parse.quote(query)
-    search_url = f"https://www.ozon.ru/category/rashodnye-materialy-dlya-3d-printerov-34720/?sorting=price&text={encoded_text}"
+    search_url = f"https://www.ozon.ru/search/?sorting=price&text={encoded_text}"
     
     try:
         driver.get(search_url)
-        time.sleep(7)
+        time.sleep(8)
         
-        link_elements = driver.find_elements(By.XPATH, "//a[contains(@href, '/product/')]")
+        # Эмуляция скролла вниз, чтобы прогрузились ленивые карточки
+        driver.execute_script("window.scrollBy(0, 800);")
+        time.sleep(3)
+        
+        page_title = driver.title
+        print(f"[Ozon] Заголовок страницы: {page_title}")
+        
+        if "доступ ограничен" in page_title.lower() or "captcha" in driver.page_source.lower():
+            print("[Ozon] Внимание: Ozon выдал защиту/капчу для зарубежного IP сервера.")
+            return
+
+        # Ищем все ссылки на товары
+        links = driver.find_elements(By.XPATH, "//a[contains(@href, '/product/')]")
+        print(f"[Ozon] Найдено ссылок на карточки: {len(links)}")
+        
         found = 0
-        seen_urls = set()
+        seen_articles = set()
         
-        for link in link_elements:
+        for link in links:
             href = link.get_attribute("href")
             if not href:
                 continue
-                
             clean_url = href.split("?")[0]
-            if clean_url in seen_urls:
+            
+            # Извлекаем ID товара из ссылки Ozon
+            product_id = clean_url.rstrip("/").split("-")[-1]
+            if not product_id.isdigit() or product_id in seen_articles:
                 continue
-            seen_urls.add(clean_url)
+            seen_articles.add(product_id)
             
-            card_text = link.text.strip()
-            if not card_text:
+            # Получаем текст блока карточки
+            parent = link
+            for _ in range(3):
                 try:
-                    parent = link.find_element(By.XPATH, "./..")
-                    card_text = parent.text.strip()
+                    parent = parent.find_element(By.XPATH, "./..")
                 except:
-                    continue
-                    
-            lines = [line.strip() for line in card_text.split("\n") if line.strip()]
+                    break
             
+            card_text = parent.text
+            lines = [l.strip() for l in card_text.split("\n") if l.strip()]
+            
+            # Извлекаем цену
             price = 0
-            for line in lines:
-                if "₽" in line:
-                    digits = "".join(ch for ch in line if ch.isdigit())
+            for l in lines:
+                if "₽" in l:
+                    digits = "".join(c for c in l if c.isdigit())
                     if digits:
                         price = int(digits)
                         break
-                        
+            
+            # Название товара
             name = ""
-            for line in lines:
-                if len(line) > len(name) and "₽" not in line and "%" not in line:
-                    name = line
+            for l in lines:
+                if len(l) > len(name) and "₽" not in l and "%" not in l and "отзыв" not in l.lower():
+                    name = l
                     
             if not name or price == 0:
                 continue
@@ -149,35 +171,33 @@ def scan_ozon(driver, query: str):
                 
             if 0 < price <= MAX_PRICE:
                 msg = (
-                    f"🔵 **Найден пластик на Ozon!**\n\n"
+                    f"🔵 **Ozon: пластик до {MAX_PRICE} ₽!**\n\n"
                     f"🔍 **Запрос:** {query}\n"
                     f"📦 **Товар:** {name}\n"
                     f"💰 **Цена:** {price} ₽\n"
-                    f"🔗 [Перейти на Ozon]({clean_url})"
+                    f"🔗 [Купить на Ozon]({clean_url})"
                 )
                 send_telegram(msg)
-                print(f"[Ozon] -> Найдено: {name} — {price} ₽")
+                print(f"[Ozon] -> Отправлено: {name} — {price} ₽")
                 found += 1
                 
-            if len(seen_urls) >= 25:
+            if len(seen_articles) >= 25:
                 break
                 
         if found == 0:
-            print(f"[Ozon] Подходящих товаров по '{query}' нет.")
+            print(f"[Ozon] По запросу '{query}' подходящих товаров дешевле {MAX_PRICE} ₽ не найдено.")
             
     except Exception as e:
-        print(f"[Ozon] Ошибка при сканировании '{query}': {e}")
+        print(f"[Ozon] Ошибка: {e}")
 
 def main():
-    print("Старт объединенного сканирования WB и Ozon...")
+    print("Запуск двойного мониторинга WB + Ozon...")
     driver = init_driver()
     try:
-        # Проверка Wildberries
         for q in SEARCH_QUERIES:
             scan_wildberries(driver, q)
             time.sleep(2)
             
-        # Проверка Ozon
         for q in SEARCH_QUERIES:
             scan_ozon(driver, q)
             time.sleep(2)
