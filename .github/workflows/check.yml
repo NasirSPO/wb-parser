@@ -19,7 +19,7 @@ jobs:
 
       - name: Установка библиотек
         run: |
-          pip install curl_cffi
+          pip install curl_cffi requests
 
       - name: Выполнение проверки
         run: |
