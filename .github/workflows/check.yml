@@ -1,0 +1,28 @@
+name: Check WB Prices
+
+on:
+  schedule:
+    # Запуск каждые 20 минут в облаке
+    - cron: '*/20 * * * *'
+  # Возможность запускать вручную
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Загрузка файлов
+        uses: actions/checkout@v4
+
+      - name: Настройка Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Установка библиотек
+        run: |
+          pip install selenium
+
+      - name: Выполнение проверки
+        run: |
+          python bot.py
