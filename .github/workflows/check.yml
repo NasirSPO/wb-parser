@@ -2,9 +2,7 @@ name: Check WB Prices
 
 on:
   schedule:
-    # Запуск каждые 20 минут в облаке
     - cron: '*/20 * * * *'
-  # Возможность запускать вручную
   workflow_dispatch:
 
 jobs:
@@ -21,7 +19,7 @@ jobs:
 
       - name: Установка библиотек
         run: |
-          pip install selenium
+          pip install curl_cffi
 
       - name: Выполнение проверки
         run: |
