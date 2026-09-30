@@ -2,7 +2,8 @@ name: Check WB Prices
 
 on:
   schedule:
-    - cron: '*/20 * * * *'
+    # Запуск каждые 2 часа
+    - cron: '0 */2 * * *'
   workflow_dispatch:
 
 jobs:
@@ -19,8 +20,8 @@ jobs:
 
       - name: Установка библиотек
         run: |
-          pip install curl_cffi requests
+          pip install requests
 
       - name: Выполнение проверки
         run: |
-          python bot.py
+          python -u bot.py
