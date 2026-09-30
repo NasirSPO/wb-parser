@@ -1,10 +1,7 @@
-import gzip
-import io
 import json
-import ssl
 import time
 import urllib.parse
-import urllib.request
+from curl_cffi import requests
 
 # === НАСТРОЙКИ ПОИСКА ===
 SEARCH_QUERIES = [
@@ -12,9 +9,8 @@ SEARCH_QUERIES = [
     "пластик PETG 1.75 1кг"
 ]
 
-MAX_PRICE = 850  # Порог цены (в рублях)
+MAX_PRICE = 850  # Порог цены в рублях
 
-# Стоп-слова (отсекаем ручки, сопла, пробники)
 STOP_WORDS = [
     "3d-ручк", "3d ручк", "сопло", "сопла", "пробник", 
     "набор для", "термобарьер", "очиститель", "образец"
@@ -24,76 +20,61 @@ STOP_WORDS = [
 TG_BOT_TOKEN = "8492519933:AAHMGWZ87rLbk2p7WnOHf2hviw_6nqequos"
 TG_CHAT_ID = "624336298"
 
-# Настройка SSL без проверки строгих сертификатов хоста
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
-
 def send_telegram(text: str):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    payload = json.dumps({"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML"}).encode('utf-8')
-    req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
+    payload = {
+        "chat_id": TG_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML"
+    }
     try:
-        urllib.request.urlopen(req, timeout=10, context=ssl_context)
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"Ошибка TG: {e}")
+        print(f"Ошибка отправки TG: {e}")
 
-def fetch_json(url: str):
+def check_wb(query: str):
+    print(f"\n[WB] Сканирование: {query}")
+    encoded = urllib.parse.quote(query)
+    
+    # Список актуальных рабочих мобильных и веб-шлюзов WB
+    urls = [
+        f"https://u-search.wb.ru/exactmatch/ru/common/v7/search?appType=1&curr=rub&dest=-1257786&query={encoded}&resultset=catalog&sort=priceup&spp=30",
+        f"https://catalog.wb.ru/catalog/electronic11/v4/filters?appType=1&curr=rub&dest=-1257786&query={encoded}&resultset=catalog&sort=priceup&spp=30"
+    ]
+    
     headers = {
-        "User-Agent": "Wildberries/2311 CFNetwork/1410.0.3 Darwin/22.6.0",
         "Accept": "*/*",
-        "Accept-Encoding": "gzip, deflate",
-        "Accept-Language": "ru-RU,ru;q=0.9",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": "https://www.wildberries.ru",
         "Referer": "https://www.wildberries.ru/"
     }
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=15, context=ssl_context) as response:
-            content = response.read()
-            if response.info().get("Content-Encoding") == "gzip":
-                buf = io.BytesIO(content)
-                with gzip.GzipFile(fileobj=buf) as f:
-                    content = f.read()
-            return json.loads(content.decode("utf-8", errors="ignore"))
-    except Exception as e:
-        print(f"Ошибка запроса к каталогу: {e}")
-        return None
 
-def check_wildberries(query: str):
-    print(f"\n[WB] Поиск: {query}")
-    encoded_query = urllib.parse.quote(query)
-    
-    # Мобильный шлюз каталога WB, доступный с зарубежных серверов
-    url = (
-        f"https://search.wb.ru/exactmatch/ru/common/v7/search?"
-        f"appType=1&curr=rub&dest=-1257786&query={encoded_query}&"
-        f"resultset=catalog&sort=priceup&spp=30&suppressSpellcheck=false"
-    )
-    
-    data = fetch_json(url)
+    data = None
+    # impersonate="chrome124" имитирует настоящий сетевой стек Chrome
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=headers, impersonate="chrome124", timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                break
+            else:
+                print(f"Шлюз ответил кодом {resp.status_code}, пробуем следующий...")
+        except Exception as err:
+            print(f"Ошибка запроса: {err}")
+            
     if not data:
-        # Резервный шлюз
-        url_fallback = (
-            f"https://catalog.wb.ru/catalog/electronic11/v4/filters?"
-            f"appType=1&curr=rub&dest=-1257786&query={encoded_query}&"
-            f"resultset=catalog&sort=priceup&spp=30"
-        )
-        data = fetch_json(url_fallback)
-
-    if not data:
-        print("[WB] Не удалось получить ответ от серверов WB.")
+        print("[WB] Не удалось получить ответ каталога.")
         return
 
     products = data.get("data", {}).get("products", []) or data.get("products", [])
-    print(f"[WB] Получено товаров из каталога: {len(products)}")
+    print(f"[WB] Получено товаров: {len(products)}")
 
     found = 0
     for item in products[:30]:
         article = item.get("id")
         name = item.get("name", "").strip()
         
-        # Получение цены
+        # Расчет цены с учетом скидки WB
         price = item.get("sizes", [{}])[0].get("price", {}).get("total", 0) // 100
         if not price:
             price = item.get("salePriceU", 0) // 100
@@ -114,16 +95,16 @@ def check_wildberries(query: str):
                 f"🔗 [Перейти на Wildberries]({item_url})"
             )
             send_telegram(msg)
-            print(f"[WB] -> Отправлено в TG: {name} — {price} ₽")
+            print(f"-> Отправлено: {name} — {price} ₽")
             found += 1
 
     if found == 0:
         print(f"[WB] По запросу '{query}' товаров дешевле {MAX_PRICE} ₽ пока нет.")
 
 def main():
-    print("Запуск мониторинга в облаке GitHub...")
+    print("Запуск сканирования WB в облаке...")
     for q in SEARCH_QUERIES:
-        check_wildberries(q)
+        check_wb(q)
         time.sleep(2)
 
 if __name__ == "__main__":
